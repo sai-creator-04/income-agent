@@ -1,0 +1,131 @@
+{
+  "name": "Agent 1 — Gumroad → Buyer Support",
+  "description": "Receives Gumroad sale/dispute webhooks and forwards to your buyer support agent. Agent auto-replies to buyer via Gmail.",
+  "flow": [
+    {
+      "id": 1,
+      "module": "gateway:CustomWebHook",
+      "version": 1,
+      "parameters": {
+        "hook": "PASTE_YOUR_MAKE_WEBHOOK_URL_HERE",
+        "maxResults": 1
+      },
+      "mapper": {},
+      "metadata": {
+        "designer": { "x": 0, "y": 0 },
+        "restore": { "parameters": { "hook": { "label": "Gumroad Incoming" } } },
+        "parameters": [{ "name": "hook", "type": "hook", "label": "Webhook" }]
+      }
+    },
+    {
+      "id": 2,
+      "module": "http:ActionSendData",
+      "version": 3,
+      "parameters": { "handleErrors": true, "useNewZLibDeCompress": true },
+      "mapper": {
+        "url": "https://YOUR-RAILWAY-URL.railway.app/webhook/gumroad",
+        "method": "POST",
+        "headers": [
+          { "name": "Content-Type", "value": "application/json" },
+          { "name": "X-Gumroad-Signature", "value": "{{1.headers['x-gumroad-signature']}}" }
+        ],
+        "body": "{{1.body}}",
+        "timeout": 30,
+        "useMtls": false,
+        "followRedirects": true,
+        "useQuerystring": false
+      },
+      "metadata": {
+        "designer": { "x": 300, "y": 0 },
+        "restore": { "expect": { "method": { "label": "POST" } } },
+        "expect": [
+          { "name": "url", "type": "url", "label": "URL", "required": true },
+          { "name": "method", "type": "select", "label": "Method" },
+          { "name": "headers", "type": "array", "label": "Headers" },
+          { "name": "body", "type": "buffer", "label": "Body" },
+          { "name": "timeout", "type": "number", "label": "Timeout" }
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "module": "builtin:BasicRouter",
+      "version": 1,
+      "mapper": null,
+      "metadata": { "designer": { "x": 600, "y": 0 } },
+      "routes": [
+        {
+          "flow": [
+            {
+              "id": 4,
+              "module": "builtin:SetVariable",
+              "version": 1,
+              "mapper": { "name": "status", "value": "{{2.data.status}}" },
+              "metadata": {
+                "designer": { "x": 900, "y": -100 },
+                "restore": {},
+                "notes": "Route A: success — log it"
+              },
+              "filter": {
+                "name": "Success",
+                "conditions": [
+                  [{ "a": "{{2.statusCode}}", "b": "200", "o": "number:equal" }]
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "flow": [
+            {
+              "id": 5,
+              "module": "http:ActionSendData",
+              "version": 3,
+              "parameters": { "handleErrors": false },
+              "mapper": {
+                "url": "https://api.telegram.org/bot{{env.TELEGRAM_BOT_TOKEN}}/sendMessage",
+                "method": "POST",
+                "headers": [{ "name": "Content-Type", "value": "application/json" }],
+                "body": "{\"chat_id\":\"{{env.TELEGRAM_CHAT_ID}}\",\"text\":\"*Agent Error*\\n\\nGumroad webhook failed.\\nStatus: {{2.statusCode}}\\nBody: {{2.data}}\",\"parse_mode\":\"Markdown\"}"
+              },
+              "metadata": {
+                "designer": { "x": 900, "y": 100 },
+                "notes": "Route B: error — alert via Telegram"
+              },
+              "filter": {
+                "name": "Error",
+                "conditions": [
+                  [{ "a": "{{2.statusCode}}", "b": "200", "o": "number:notEqual" }]
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "instant": true,
+    "version": 1,
+    "scenario": {
+      "roundtrips": 1,
+      "maxErrors": 3,
+      "autoCommit": true,
+      "autoCommitTriggerLast": true,
+      "sequential": false,
+      "confidential": false,
+      "dataloss": false,
+      "dlq": false
+    },
+    "designer": { "orphans": [] },
+    "zone": "eu1.make.com"
+  },
+  "_setup_instructions": {
+    "step1": "In Make.com: Create new scenario → import this JSON",
+    "step2": "Click the Webhook module → copy the webhook URL",
+    "step3": "In Gumroad: Settings → Advanced → Webhooks → paste URL → save",
+    "step4": "Replace YOUR-RAILWAY-URL with your actual Railway app URL",
+    "step5": "Add env vars in Make.com: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID",
+    "step6": "Turn the scenario ON → test by buying your own product"
+  }
+}

@@ -1,0 +1,100 @@
+{
+  "name": "Agent 4 — Daily DM Finder (Mon–Sat 08:30)",
+  "description": "Every morning at 08:30, finds 10 traders on Twitter who posted about losses, writes personalised DMs, sends all to your Telegram. You paste and send (10 min).",
+  "flow": [
+    {
+      "id": 1,
+      "module": "util:SetVariables",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "variables": [
+          { "name": "agent_url", "value": "https://YOUR-RAILWAY-URL.railway.app/run/dm" }
+        ]
+      },
+      "metadata": {
+        "designer": { "x": 0, "y": 0 },
+        "notes": "Staggered 30min after Reddit so both don't hit Claude at once."
+      },
+      "scheduling": {
+        "type": "cron",
+        "cron": "30 8 * * 1-6",
+        "timezone": "Asia/Kolkata"
+      }
+    },
+    {
+      "id": 2,
+      "module": "http:ActionSendData",
+      "version": 3,
+      "parameters": { "handleErrors": true },
+      "mapper": {
+        "url": "{{1.agent_url}}",
+        "method": "POST",
+        "headers": [{ "name": "Content-Type", "value": "application/json" }],
+        "body": "{}",
+        "timeout": 10
+      },
+      "metadata": { "designer": { "x": 300, "y": 0 } }
+    },
+    {
+      "id": 3,
+      "module": "builtin:BasicRouter",
+      "version": 1,
+      "mapper": null,
+      "metadata": { "designer": { "x": 600, "y": 0 } },
+      "routes": [
+        {
+          "flow": [
+            {
+              "id": 4,
+              "module": "http:ActionSendData",
+              "version": 3,
+              "mapper": {
+                "url": "https://api.telegram.org/bot{{env.TELEGRAM_BOT_TOKEN}}/sendMessage",
+                "method": "POST",
+                "headers": [{ "name": "Content-Type", "value": "application/json" }],
+                "body": "{\"chat_id\":\"{{env.TELEGRAM_CHAT_ID}}\",\"text\":\"DM agent running — 10 pre-written DMs incoming to Telegram in ~60 seconds. Open Twitter ready.\",\"parse_mode\":\"Markdown\"}"
+              },
+              "metadata": { "designer": { "x": 900, "y": -100 } },
+              "filter": {
+                "name": "OK",
+                "conditions": [[{ "a": "{{2.statusCode}}", "b": "202", "o": "number:equal" }]]
+              }
+            }
+          ]
+        },
+        {
+          "flow": [
+            {
+              "id": 5,
+              "module": "http:ActionSendData",
+              "version": 3,
+              "mapper": {
+                "url": "https://api.telegram.org/bot{{env.TELEGRAM_BOT_TOKEN}}/sendMessage",
+                "method": "POST",
+                "headers": [{ "name": "Content-Type", "value": "application/json" }],
+                "body": "{\"chat_id\":\"{{env.TELEGRAM_CHAT_ID}}\",\"text\":\"*DM Agent Error*\\nStatus {{2.statusCode}} — check Railway logs.\",\"parse_mode\":\"Markdown\"}"
+              },
+              "metadata": { "designer": { "x": 900, "y": 100 } },
+              "filter": {
+                "name": "Error",
+                "conditions": [[{ "a": "{{2.statusCode}}", "b": "202", "o": "number:notEqual" }]]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "instant": false,
+    "version": 1,
+    "scenario": { "roundtrips": 1, "maxErrors": 3, "autoCommit": true, "sequential": false }
+  },
+  "_setup_instructions": {
+    "step1": "Import this JSON into Make.com",
+    "step2": "Replace YOUR-RAILWAY-URL in module 1",
+    "step3": "Add env vars: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID",
+    "step4": "Turn ON — fires Mon–Sat at 08:30"
+  }
+}

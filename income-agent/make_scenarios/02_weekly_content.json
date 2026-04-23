@@ -1,0 +1,111 @@
+{
+  "name": "Agent 2 — Weekly Content Scheduler (Sundays 09:00)",
+  "description": "Every Sunday at 09:00, triggers the content agent to generate 7 Twitter posts and schedule them in Buffer automatically.",
+  "flow": [
+    {
+      "id": 1,
+      "module": "util:SetVariables",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "variables": [
+          { "name": "agent_url", "value": "https://YOUR-RAILWAY-URL.railway.app/run/content" }
+        ]
+      },
+      "metadata": {
+        "designer": { "x": 0, "y": 0 },
+        "restore": {},
+        "notes": "Change YOUR-RAILWAY-URL to your actual Railway deployment URL"
+      },
+      "scheduling": {
+        "type": "cron",
+        "cron": "0 9 * * 0",
+        "timezone": "Asia/Kolkata"
+      }
+    },
+    {
+      "id": 2,
+      "module": "http:ActionSendData",
+      "version": 3,
+      "parameters": { "handleErrors": true },
+      "mapper": {
+        "url": "{{1.agent_url}}",
+        "method": "POST",
+        "headers": [{ "name": "Content-Type", "value": "application/json" }],
+        "body": "{}",
+        "timeout": 10
+      },
+      "metadata": {
+        "designer": { "x": 300, "y": 0 },
+        "restore": { "expect": { "method": { "label": "POST" } } },
+        "notes": "Triggers the content agent. Returns 202 immediately — agent runs async."
+      }
+    },
+    {
+      "id": 3,
+      "module": "builtin:BasicRouter",
+      "version": 1,
+      "mapper": null,
+      "metadata": { "designer": { "x": 600, "y": 0 } },
+      "routes": [
+        {
+          "flow": [
+            {
+              "id": 4,
+              "module": "http:ActionSendData",
+              "version": 3,
+              "mapper": {
+                "url": "https://api.telegram.org/bot{{env.TELEGRAM_BOT_TOKEN}}/sendMessage",
+                "method": "POST",
+                "headers": [{ "name": "Content-Type", "value": "application/json" }],
+                "body": "{\"chat_id\":\"{{env.TELEGRAM_CHAT_ID}}\",\"text\":\"Content agent triggered — 7 posts generating now. Check Buffer in ~2 minutes.\",\"parse_mode\":\"Markdown\"}"
+              },
+              "metadata": { "designer": { "x": 900, "y": -100 }, "notes": "Success confirmation" },
+              "filter": {
+                "name": "Triggered OK",
+                "conditions": [[{ "a": "{{2.statusCode}}", "b": "202", "o": "number:equal" }]]
+              }
+            }
+          ]
+        },
+        {
+          "flow": [
+            {
+              "id": 5,
+              "module": "http:ActionSendData",
+              "version": 3,
+              "mapper": {
+                "url": "https://api.telegram.org/bot{{env.TELEGRAM_BOT_TOKEN}}/sendMessage",
+                "method": "POST",
+                "headers": [{ "name": "Content-Type", "value": "application/json" }],
+                "body": "{\"chat_id\":\"{{env.TELEGRAM_CHAT_ID}}\",\"text\":\"*Content Agent Error*\\nStatus: {{2.statusCode}}\\nIs your Railway server running?\",\"parse_mode\":\"Markdown\"}"
+              },
+              "metadata": { "designer": { "x": 900, "y": 100 }, "notes": "Error alert" },
+              "filter": {
+                "name": "Error",
+                "conditions": [[{ "a": "{{2.statusCode}}", "b": "202", "o": "number:notEqual" }]]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "instant": false,
+    "version": 1,
+    "scenario": {
+      "roundtrips": 1,
+      "maxErrors": 3,
+      "autoCommit": true,
+      "sequential": false
+    }
+  },
+  "_setup_instructions": {
+    "step1": "Import this JSON into Make.com",
+    "step2": "Replace YOUR-RAILWAY-URL in module 1",
+    "step3": "Add env vars: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID",
+    "step4": "Change timezone in scheduling if needed (currently Asia/Kolkata)",
+    "step5": "Turn ON — runs every Sunday at 09:00 automatically"
+  }
+}
