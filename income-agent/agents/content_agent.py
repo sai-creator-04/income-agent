@@ -2,12 +2,14 @@
 Agent 2: Content Agent
 ──────────────────────
 Trigger : Cron every Sunday 09:00
-Action  : Claude writes 7 trading psychology posts → Buffer queues them Mon–Sun
+Action  : Gemini writes 7 trading psychology posts → saves to posts_ready.json
+          → sends all posts to Telegram → Make.com picks them up and posts to Twitter
 Cost    : ~$0.02/week
 """
 import logging
 import os
 import re
+import json
 from datetime import date
 from typing import List
 from core.claude_client import ClaudeClient
@@ -22,7 +24,7 @@ Write exactly 7 Twitter/X posts about trading psychology — one per line, separ
 Each post must:
 - Be under 250 characters
 - Give one actionable trading psychology tip or insight
-- End with: "Full checklist → [LINK]"
+- End with: "Full checklist -> [LINK]"
 - Feel like advice from a real trader who's been through losses
 - Use plain language, no jargon, no emojis
 
@@ -35,26 +37,20 @@ TOPICS to rotate through (use a different one each post):
 6. The psychology of a winning streak
 7. Dealing with a losing day
 
-Output ONLY the 7 posts, numbered 1–7. Nothing else."""
+Output ONLY the 7 posts, numbered 1-7. Nothing else."""
 
 TWEET_LINK = "https://gum.co/tradingpsych"
+HASHTAGS = "#tradingpsychology #daytrading #forextrader #stockmarket #retailtrader"
 
 
 class ContentAgent:
-    def __init__(
-        self,
-        claude: ClaudeClient = None,
-        buffer: BufferClient = None,
-        telegram: TelegramClient = None,
-        gumroad_link: str = None,
-    ):
+    def __init__(self, claude=None, buffer=None, telegram=None, gumroad_link=None):
         self.claude = claude or ClaudeClient()
         self.buffer = buffer or BufferClient()
         self.telegram = telegram or TelegramClient()
         self.gumroad_link = gumroad_link or os.environ.get("GUMROAD_LINK", TWEET_LINK)
 
     def generate_posts(self) -> List[str]:
-        """Ask Claude to generate 7 posts. Returns cleaned list."""
         logger.info("Generating weekly content batch...")
         raw = self.claude.ask(
             SYSTEM_PROMPT,
@@ -62,19 +58,21 @@ class ContentAgent:
             max_tokens=1200,
         )
         posts = self._parse_posts(raw)
-        posts = [p.replace("[LINK]", self.gumroad_link) for p in posts]
-        logger.info(f"Generated {len(posts)} posts")
-        return posts
+        # Replace link placeholder and add hashtags
+        final = []
+        for p in posts:
+            p = p.replace("[LINK]", self.gumroad_link)
+            p = p.replace("-> ", "→ ")
+            if HASHTAGS not in p:
+                p = p + f"\n{HASHTAGS}"
+            final.append(p)
+        logger.info(f"Generated {len(final)} posts")
+        return final
 
     def _parse_posts(self, raw: str) -> List[str]:
-        """
-        Parse numbered posts from Claude output.
-        Handles: "1. text", "1) text", blank-line separated blocks.
-        """
         raw = raw.strip()
         posts = []
 
-        # Detect if input is numbered format (has "1. " or "1) " patterns)
         is_numbered = bool(re.search(r"(?m)^\d+[\.\)]\s+", raw))
 
         if is_numbered:
@@ -86,7 +84,6 @@ class ContentAgent:
             if posts:
                 return posts[:7]
 
-        # Fallback: blank-line separated blocks
         blocks = re.split(r"\n{2,}", raw)
         for block in blocks:
             block = re.sub(r"^\d+[\.\)]\s*", "", " ".join(block.split()))
@@ -94,11 +91,22 @@ class ContentAgent:
                 posts.append(block)
         return posts[:7]
 
+    def _save_posts_for_makecom(self, posts: List[str]) -> None:
+        """Save posts to JSON file so Make.com can read and post them to Twitter."""
+        payload = {
+            "date": date.today().isoformat(),
+            "week": date.today().strftime("%Y-W%U"),
+            "posts": posts,
+            "count": len(posts)
+        }
+        try:
+            with open("posts_ready.json", "w") as f:
+                json.dump(payload, f, indent=2)
+            logger.info(f"Saved {len(posts)} posts to posts_ready.json")
+        except Exception as e:
+            logger.error(f"Failed to save posts: {e}")
+
     def run(self) -> dict:
-        """
-        Full weekly run: generate → schedule → notify.
-        Called every Sunday by the scheduler.
-        """
         try:
             posts = self.generate_posts()
         except Exception as e:
@@ -108,32 +116,25 @@ class ContentAgent:
 
         if not posts:
             logger.error("No posts generated — aborting")
-            self.telegram.alert("Content Agent", "Generated 0 posts — check Claude prompt")
+            self.telegram.alert("Content Agent", "Generated 0 posts — check prompt")
             return {"status": "empty"}
 
-        profile_id = self.buffer.get_twitter_profile_id()
-        if not profile_id:
-            logger.error("No Twitter profile in Buffer")
-            self.telegram.alert(
-                "Content Agent — Buffer issue",
-                "No Twitter profile found. Connect Twitter in Buffer first.",
-            )
-            return {"status": "no_profile"}
+        # Save for Make.com to pick up
+        self._save_posts_for_makecom(posts)
 
-        results = self.buffer.schedule_batch(posts, profile_id)
-
-        summary = (
-            f"*Weekly content scheduled*\n\n"
-            f"Posts queued: {results['queued']}/{results['total']}\n"
-            f"Failed: {results['failed']}\n\n"
-            + "\n\n".join(f"{i+1}. {p[:80]}..." for i, p in enumerate(posts[:3]))
-            + ("\n\n...and more" if len(posts) > 3 else "")
+        # Send all posts to Telegram so you can see them
+        posts_preview = "\n\n".join(
+            f"*Post {i+1}:*\n{p}" for i, p in enumerate(posts)
         )
-        self.telegram.send(summary)
+        self.telegram.send(
+            f"*7 Twitter posts generated — week of {date.today().strftime('%b %d')}*\n\n"
+            f"{posts_preview}\n\n"
+            f"_These will be posted to Twitter via Make.com automatically._"
+        )
 
+        logger.info(f"Content agent done — {len(posts)} posts ready")
         return {
-            "status": "scheduled",
-            "queued": results["queued"],
-            "failed": results["failed"],
+            "status": "ready",
             "posts": posts,
+            "count": len(posts)
         }

@@ -3,9 +3,10 @@ Agent 4: Cold DM Agent
 ───────────────────────
 Trigger : Cron every day at 08:30
 Action  : Search Twitter for traders in pain → Claude writes personalised DMs
-          → sends list to your Telegram → YOU paste and send (10 min)
+          → sends ALL DMs in one batch message + profile buttons to Telegram
+You do  : Copy each DM → tap profile button → paste → send (4 min total)
 Why manual sending: Twitter/Instagram ban mass-DM bots.
-Cost    : ~$0.01/day (Apify free tier + Claude Haiku)
+Cost    : ~$0.01/day (Apify free tier + Gemini)
 """
 import logging
 import os
@@ -45,24 +46,13 @@ Output ONLY the DM text. Nothing else."""
 
 
 class DMAgent:
-    def __init__(
-        self,
-        claude: ClaudeClient = None,
-        telegram: TelegramClient = None,
-        apify_token: str = None,
-        gumroad_link: str = None,
-    ):
+    def __init__(self, claude=None, telegram=None, apify_token=None, gumroad_link=None):
         self.claude = claude or ClaudeClient()
         self.telegram = telegram or TelegramClient()
         self.apify_token = apify_token or os.environ.get("APIFY_API_TOKEN", "")
         self.gumroad_link = gumroad_link or os.environ.get("GUMROAD_LINK", "")
 
     def search_twitter(self, query: str, max_results: int = 5) -> List[dict]:
-        """
-        Search Twitter via Apify's Twitter Scraper actor.
-        Returns list of {username, text, url} dicts.
-        Apify free tier: $5 credit/month — enough for daily searches.
-        """
         if not self.apify_token:
             logger.warning("No APIFY_API_TOKEN — returning mock data for testing")
             return self._mock_results(query)
@@ -98,7 +88,6 @@ class DMAgent:
             return []
 
     def _mock_results(self, query: str) -> List[dict]:
-        """Fallback mock data for testing without Apify."""
         return [
             {
                 "username": "trader_example",
@@ -108,7 +97,6 @@ class DMAgent:
         ]
 
     def write_dm(self, tweet_text: str, username: str) -> Optional[str]:
-        """Generate a personalised DM for a specific tweet."""
         user_prompt = (
             f"Twitter username: @{username}\n"
             f"Their tweet: {tweet_text}\n\n"
@@ -124,10 +112,6 @@ class DMAgent:
             return None
 
     def run(self, max_dms: int = 10) -> dict:
-        """
-        Daily run: search Twitter → write DMs → send to Telegram.
-        You get a Telegram message with all DMs ready to copy-paste.
-        """
         logger.info("DM Agent starting daily run...")
         targets = []
 
@@ -166,26 +150,56 @@ class DMAgent:
         }
 
     def _send_to_telegram(self, dm_list: List[dict]) -> None:
-        """Format and send the DM list to Telegram."""
+        """Send all DMs in one batch message + profile buttons for quick access."""
         if not dm_list:
             return
 
+        token = os.environ.get("TELEGRAM_BOT_TOKEN")
+        chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+
+        # Step 1: Send one big message with ALL DMs listed
         header = (
             f"*{len(dm_list)} DMs ready — {date.today().strftime('%b %d')}*\n"
-            f"Open each profile → paste DM → send\n"
-            f"{'─' * 30}"
+            f"Copy each DM below, then tap the profile buttons to open Twitter\n"
+            f"{'─' * 30}\n\n"
         )
-        self.telegram.send(header)
 
+        batch = header
         for i, item in enumerate(dm_list, 1):
-            msg = (
-                f"*DM {i}/{len(dm_list)}*\n"
-                f"Profile: {item['profile_url']}\n"
-                f"Their tweet: _{item['tweet'][:100]}_\n\n"
-                f"*Your DM:*\n{item['dm']}"
+            batch += (
+                f"*DM {i} — @{item['username']}*\n"
+                f"_{item['tweet'][:80]}_\n\n"
+                f"{item['dm']}\n\n"
+                f"{'─' * 20}\n\n"
             )
-            self.telegram.send(msg)
 
-        self.telegram.send(
-            f"_Total: {len(dm_list)} DMs. Estimated send time: ~10 minutes._"
-        )
+        # Split if too long for Telegram (4096 char limit)
+        if len(batch) > 4000:
+            chunks = [batch[i:i+4000] for i in range(0, len(batch), 4000)]
+            for chunk in chunks:
+                self.telegram.send(chunk)
+        else:
+            self.telegram.send(batch)
+
+        # Step 2: Send profile buttons (max 5 rows, Telegram limit)
+        if token and chat_id:
+            buttons = []
+            for item in dm_list[:5]:
+                buttons.append([{
+                    "text": f"🐦 Open @{item['username']} on Twitter",
+                    "url": item["profile_url"]
+                }])
+
+            try:
+                requests.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": f"*Tap to open each profile → paste their DM → send*\n\n_Estimated time: ~4 minutes for all {len(dm_list)} DMs_",
+                        "parse_mode": "Markdown",
+                        "reply_markup": {"inline_keyboard": buttons}
+                    },
+                    timeout=10
+                )
+            except Exception as e:
+                logger.error(f"Button send failed: {e}")
